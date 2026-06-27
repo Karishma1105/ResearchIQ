@@ -3,6 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from routers import chat
 import uvicorn
 
+# Add this right after creating your FastAPI app
+origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "*",  # Allow all origins for now (we'll restrict later)
+]
+
 app = FastAPI(title="ResearchIQ API", description="AI-powered research assistant API")
 
 # Configure CORS

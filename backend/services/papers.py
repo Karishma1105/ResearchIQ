@@ -1,13 +1,30 @@
 import httpx
 import xml.etree.ElementTree as ET
+import logging
+
+logger = logging.getLogger(__name__)
 
 SEMANTIC_SCHOLAR_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
+OPENALEX_URL = "https://api.openalex.org/works"
+ARXIV_URL = "https://export.arxiv.org/api/query"
 
-async def fetch_papers(query: str, limit: int = 5) -> list:
-    """Fetch papers from Semantic Scholar and fallback to arXiv."""
+def reconstruct_abstract(inverted_index: dict) -> str:
+    """Reconstructs an abstract from OpenAlex's inverted index format."""
+    if not inverted_index:
+        return ""
+    word_positions = []
+    for word, positions in inverted_index.items():
+        for pos in positions:
+            word_positions.append((pos, word))
+    # Sort by position to rebuild the sentence in order
+    word_positions.sort(key=lambda x: x[0])
+    return " ".join([word for pos, word in word_positions])
+
+async def fetch_papers(query: str, limit: int = 10) -> list:
+    """Fetch papers with a 3-tier fallback: Semantic Scholar -> OpenAlex -> arXiv."""
     papers = []
 
-    # Try Semantic Scholar First
+    # --- 1. Try Semantic Scholar First ---
     try:
         async with httpx.AsyncClient(follow_redirects=True) as client:
             response = await client.get(
@@ -22,7 +39,7 @@ async def fetch_papers(query: str, limit: int = 5) -> list:
             if response.status_code == 200:
                 data = response.json()
                 for item in data.get("data", []):
-                    if item.get("abstract"):  # Only include papers with abstracts
+                    if item.get("abstract"):
                         papers.append({
                             "source": "Semantic Scholar",
                             "title": item.get("title", ""),
@@ -32,19 +49,62 @@ async def fetch_papers(query: str, limit: int = 5) -> list:
                             "authors": [a.get("name") for a in item.get("authors", [])][:3]
                         })
             elif response.status_code == 429:
-                print("Semantic Scholar rate limited (429), falling back to arXiv.")
+                logger.warning("Semantic Scholar rate limited (429), falling back to OpenAlex.")
             else:
-                print(f"Semantic Scholar returned status {response.status_code}")
+                logger.warning(f"Semantic Scholar returned status {response.status_code}")
     except Exception as e:
-        print(f"Semantic Scholar API error: {e}")
+        logger.error(f"Semantic Scholar API error: {e}")
 
-    # If we didn't get enough papers, use arXiv as fallback
+    # --- 2. Fallback to OpenAlex (Free, No Key, Massive Database) ---
     if len(papers) < limit:
         try:
-            # NOTE: Use https:// — http:// returns a 301 redirect that httpx won't follow by default
             async with httpx.AsyncClient(follow_redirects=True) as client:
                 response = await client.get(
-                    "https://export.arxiv.org/api/query",
+                    OPENALEX_URL,
+                    params={
+                        "search": query,
+                        "per-page": limit - len(papers),
+                        "select": "id,doi,title,abstract_inverted_index,publication_year,authorships,primary_location",
+                        # Adding an email puts you in the "polite pool" for faster responses
+                        "mailto": "researchiq@example.com" 
+                    },
+                    timeout=10.0
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    for item in data.get("results", []):
+                        # OpenAlex stores abstracts as an inverted index, so we must rebuild it
+                        abstract = reconstruct_abstract(item.get("abstract_inverted_index"))
+                        
+                        if abstract: # Only include papers that have an abstract
+                            # Get the best available URL (DOI -> Landing Page -> OpenAlex ID)
+                            url = item.get("doi")
+                            if not url and item.get("primary_location") and item["primary_location"].get("landing_page_url"):
+                                url = item["primary_location"]["landing_page_url"]
+                            elif not url:
+                                url = item.get("id", "")
+                            
+                            authors = [a["author"]["display_name"] for a in item.get("authorships", []) if a.get("author")][:3]
+                            
+                            papers.append({
+                                "source": "OpenAlex",
+                                "title": item.get("title", ""),
+                                "abstract": abstract,
+                                "url": url,
+                                "year": item.get("publication_year", ""),
+                                "authors": authors
+                            })
+                else:
+                    logger.warning(f"OpenAlex returned status {response.status_code}")
+        except Exception as e:
+            logger.error(f"OpenAlex API error: {e}")
+
+    # --- 3. Final Fallback to arXiv ---
+    if len(papers) < limit:
+        try:
+            async with httpx.AsyncClient(follow_redirects=True) as client:
+                response = await client.get(
+                    ARXIV_URL,
                     params={
                         "search_query": f"all:{query}",
                         "start": 0,
@@ -53,7 +113,6 @@ async def fetch_papers(query: str, limit: int = 5) -> list:
                     headers={"User-Agent": "ResearchIQ/1.0 (research assistant app)"},
                     timeout=15.0
                 )
-                print(f"arXiv status: {response.status_code}, body length: {len(response.text)}")
                 if response.status_code == 200 and response.text.strip():
                     root = ET.fromstring(response.text)
                     namespace = {"atom": "http://www.w3.org/2005/Atom"}
@@ -63,6 +122,7 @@ async def fetch_papers(query: str, limit: int = 5) -> list:
                         url_el = entry.find("atom:id", namespace)
                         if title_el is None or abstract_el is None:
                             continue
+                        
                         papers.append({
                             "source": "arXiv",
                             "title": title_el.text.replace("\n", " ").strip(),
@@ -72,7 +132,7 @@ async def fetch_papers(query: str, limit: int = 5) -> list:
                             "authors": []
                         })
         except Exception as e:
-            print(f"arXiv API error: {e}")
+            logger.error(f"arXiv API error: {e}")
 
-    print(f"Total papers fetched: {len(papers)}")
+    logger.info(f"Total papers fetched: {len(papers)}")
     return papers[:limit]

@@ -1,203 +1,191 @@
-import React from 'react';
-import { User, Bot, ExternalLink, Lightbulb, AlertTriangle, Target, BookOpen, Search } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { User, Sparkles, ExternalLink, Copy, CheckCheck, Bookmark, BookmarkCheck, Search, AlertTriangle, MessageSquare, Download } from 'lucide-react';
 import type { ChatResponse, Paper } from '../services/api';
+import { useLibrary } from '../context/LibraryContext';
+import posthog from 'posthog-js';
+import { ProjectRoadmap } from './ProjectRoadmap';
+import { DeepDiveChat } from './DeepDiveChat';
+import { exportToPDF } from '../utils/exportPDF';
+import { Tilt3D } from './Tilt3D';
 
 interface MessageBubbleProps {
   role: 'user' | 'assistant';
   content: string;
   data?: ChatResponse;
-  isLoading?: boolean;
+  isError?: boolean;
 }
 
-export const MessageBubble: React.FC<MessageBubbleProps> = ({ role, content, data, isLoading }) => {
+export const MessageBubble: React.FC<MessageBubbleProps> = ({ role, content, data, isError }) => {
   const isUser = role === 'user';
+  const { toggleBookmark, isBookmarked } = useLibrary();
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [deepDivePaper, setDeepDivePaper] = useState<Paper | null>(null);
 
-  if (isLoading) {
-    return (
-      <div className="flex w-full mb-8 justify-start">
-        <div className="flex gap-4 max-w-4xl">
-          <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center shrink-0 border border-accent/30">
-            <Bot className="w-5 h-5 text-accent animate-pulse" />
-          </div>
-          <div className="glass-panel rounded-2xl rounded-tl-sm px-6 py-4 flex items-center gap-3">
-            <div className="flex gap-1">
-              <div className="w-2 h-2 rounded-full bg-accent animate-bounce" style={{ animationDelay: '0ms' }} />
-              <div className="w-2 h-2 rounded-full bg-accent animate-bounce" style={{ animationDelay: '150ms' }} />
-              <div className="w-2 h-2 rounded-full bg-accent animate-bounce" style={{ animationDelay: '300ms' }} />
-            </div>
-            <span className="text-textSecondary text-sm font-medium">Researching and analyzing papers...</span>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // Debug logging
+  useEffect(() => {
+    if (data && role === 'assistant') {
+      console.log('📊 Full Response Data:', data);
+      console.log('📊 Ideas Data:', data.ideas);
+      console.log('📊 Mini Projects Count:', data.ideas?.mini_projects?.length || 0);
+      console.log('📊 Has Major Project:', !!data.ideas?.major_project?.title);
+    }
+  }, [data, role]);
+
+  const handleCopy = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
 
   return (
-    <div className={`flex w-full mb-10 ${isUser ? 'justify-end' : 'justify-start'}`}>
-      <div className={`flex gap-4 max-w-4xl w-full ${isUser ? 'flex-row-reverse' : ''}`}>
-        
-        {/* Avatar */}
-        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 border ${
-          isUser 
-            ? 'bg-surfaceHover border-white/10' 
-            : 'bg-accent/10 border-accent/30'
+    <div className={`flex gap-4 ${isUser ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-4 duration-700`}>
+      {!isUser && (
+        <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-1 border ${
+          isError ? 'bg-amber-500/10 border-amber-500/20' : 'bg-indigo-500/10 border-indigo-500/20'
         }`}>
-          {isUser ? <User className="w-5 h-5 text-textPrimary" /> : <Bot className="w-5 h-5 text-accent" />}
+          {isError ? <AlertTriangle className="w-4 h-4 text-amber-400" /> : <Sparkles className="w-4 h-4 text-indigo-400" />}
         </div>
+      )}
 
-        {/* Content */}
-        <div className={`flex-1 flex flex-col gap-2 ${isUser ? 'items-end' : 'items-start'}`}>
-          <div className={`px-6 py-4 rounded-2xl max-w-full ${
-            isUser 
-              ? 'bg-accent text-white rounded-tr-sm shadow-lg shadow-accent/20' 
-              : 'glass-panel rounded-tl-sm text-textPrimary'
-          }`}>
-            <p className="whitespace-pre-wrap leading-relaxed">{content}</p>
+      <div className={`flex-1 max-w-[85%] ${isUser ? 'flex justify-end' : ''}`}>
+        {isUser ? (
+          <div className="bg-white/5 border border-white/10 text-zinc-200 px-5 py-3 rounded-2xl rounded-tr-sm">
+            <p className="text-sm leading-relaxed">{content}</p>
           </div>
-
-          {/* AI Structured Data */}
-          {!isUser && data && (
-            <div className="w-full flex flex-col gap-6 mt-4 animate-slide-up">
-              
-              {/* Search Info */}
-              <div className="flex items-center gap-2 text-sm text-textSecondary bg-surface/50 p-3 rounded-lg border border-white/5">
-                <Search className="w-4 h-4 text-accent" />
-                <span>Searched for: <span className="text-accent/90 font-medium">"{data.refined_query}"</span></span>
+        ) : (
+          <div className="space-y-6 w-full">
+            {isError ? (
+              <div className="bg-amber-500/5 border border-amber-500/20 text-amber-200/90 px-5 py-4 rounded-xl">
+                <p className="text-sm leading-relaxed whitespace-pre-wrap">{content}</p>
               </div>
+            ) : (
+              <>
+                <p className="text-sm text-zinc-400 font-medium">{content}</p>
 
-              {/* Papers Section */}
-              <div className="space-y-4">
-                <h3 className="text-lg font-semibold flex items-center gap-2 text-textPrimary">
-                  <BookOpen className="w-5 h-5 text-blue-400" />
-                  Analyzed Papers
-                </h3>
-                <div className="grid gap-4 md:grid-cols-2">
-                  {data.papers.map((paper: Paper, idx: number) => (
-                    <div key={idx} className="bg-surfaceHover/50 border border-white/5 rounded-xl p-5 hover:border-white/10 transition-colors group">
-                      <div className="flex justify-between items-start gap-4 mb-3">
-                        <h4 className="font-medium text-blue-200 leading-snug line-clamp-2" title={paper.title}>
-                          {paper.title}
-                        </h4>
-                        <a href={paper.url} target="_blank" rel="noreferrer" className="p-1 hover:bg-white/10 rounded-md transition-colors shrink-0 text-textSecondary hover:text-white">
-                          <ExternalLink className="w-4 h-4" />
-                        </a>
+                {data && (
+                  <>
+                    {/* Top Bar */}
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="inline-flex items-center gap-2 bg-white/[0.03] border border-white/5 px-3 py-1.5 rounded-full text-xs text-zinc-400">
+                        <Search className="w-3 h-3 text-indigo-400" />
+                        Searched: <span className="text-zinc-200 font-medium">"{data.refined_query}"</span>
                       </div>
-                      <p className="text-sm text-textPrimary mb-4">{paper.summary.simple_explanation}</p>
                       
-                      <div className="space-y-2 text-xs">
-                        <div className="bg-surface/80 p-2 rounded border border-white/5">
-                          <span className="font-semibold text-textSecondary block mb-1">Problem:</span>
-                          <span className="text-textPrimary/90">{paper.summary.problem_statement}</span>
-                        </div>
-                        <div className="bg-surface/80 p-2 rounded border border-white/5">
-                          <span className="font-semibold text-textSecondary block mb-1">Method:</span>
-                          <span className="text-textPrimary/90">{paper.summary.methodology}</span>
-                        </div>
-                        <div className="bg-surface/80 p-2 rounded border border-white/5">
-                          <span className="font-semibold text-textSecondary block mb-1">Result:</span>
-                          <span className="text-textPrimary/90">{paper.summary.key_results}</span>
-                        </div>
-                      </div>
-                      <div className="mt-3 text-[10px] uppercase tracking-wider text-textSecondary font-semibold">
-                        Source: {paper.source}
-                      </div>
+                      {data.papers?.length > 0 && (
+                        <button 
+                          onClick={() => exportToPDF(data, data.original_query)}
+                          className="bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-2 hover:scale-105"
+                        >
+                          <Download className="w-3.5 h-3.5" /> Export PDF
+                        </button>
+                      )}
                     </div>
-                  ))}
-                </div>
-              </div>
 
-              {/* Gap Analysis */}
-              <div className="bg-gradient-to-br from-surfaceHover to-surface border border-white/10 rounded-xl p-6 shadow-xl">
-                <h3 className="text-lg font-semibold flex items-center gap-2 mb-6">
-                  <AlertTriangle className="w-5 h-5 text-yellow-500" />
-                  Research Gap Analysis
-                </h3>
-                <div className="grid md:grid-cols-2 gap-6">
-                  <div>
-                    <h4 className="text-sm font-semibold text-textSecondary uppercase tracking-wider mb-3">Common Approaches</h4>
-                    <ul className="space-y-2">
-                      {data.gap_analysis.common_approaches?.map((item, i) => (
-                        <li key={i} className="flex gap-2 text-sm items-start">
-                          <div className="w-1.5 h-1.5 rounded-full bg-blue-500 mt-1.5 shrink-0" />
-                          <span className="text-textPrimary/90">{item}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-semibold text-textSecondary uppercase tracking-wider mb-3">Limitations</h4>
-                    <ul className="space-y-2">
-                      {data.gap_analysis.limitations?.map((item, i) => (
-                        <li key={i} className="flex gap-2 text-sm items-start">
-                          <div className="w-1.5 h-1.5 rounded-full bg-red-400 mt-1.5 shrink-0" />
-                          <span className="text-textPrimary/90">{item}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div className="md:col-span-2 bg-yellow-500/10 border border-yellow-500/20 p-4 rounded-lg mt-2">
-                    <h4 className="text-sm font-semibold text-yellow-500 uppercase tracking-wider mb-3 flex items-center gap-2">
-                      <Target className="w-4 h-4" />
-                      Identified Gaps
-                    </h4>
-                    <ul className="space-y-2">
-                      {data.gap_analysis.research_gaps?.map((item, i) => (
-                        <li key={i} className="flex gap-2 text-sm items-start">
-                          <div className="w-1.5 h-1.5 rounded-full bg-yellow-500 mt-1.5 shrink-0" />
-                          <span className="text-textPrimary">{item}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              </div>
+                    {/* Papers Grid - Only show papers with valid summaries */}
+                    {data.papers?.length > 0 && (
+                      <div className="space-y-3">
+                        <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider px-1">Analyzed Papers</h3>
+                        <div className="grid gap-3 grid-cols-1 lg:grid-cols-2">
+                          {data.papers
+                            .filter(paper => paper.summary?.simple_explanation && paper.summary.simple_explanation !== "Error generating summary.")
+                            .map((paper: Paper, idx: number) => {
+                              const saved = isBookmarked(paper.url);
+                              return (
+                                <Tilt3D key={idx} maxTilt={10} scale={1.03} glare={true}>
+                                  <div className="group relative bg-white/[0.02] border border-white/5 hover:border-indigo-500/30 rounded-xl p-5 transition-all duration-500 hover:shadow-[0_20px_40px_rgba(99,102,241,0.15)]">
+                                    <div className="flex justify-between items-start gap-3 mb-3">
+                                      <h4 className="text-sm font-semibold text-zinc-100 leading-snug line-clamp-2">{paper.title}</h4>
+                                      <div className="flex gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <button 
+                                          onClick={() => { toggleBookmark(paper); posthog.capture('paper_bookmarked', { paper_title: paper.title }); }} 
+                                          className="p-1.5 hover:bg-white/10 rounded-md transition-colors"
+                                        >
+                                          {saved ? <BookmarkCheck className="w-3.5 h-3.5 text-indigo-400" /> : <Bookmark className="w-3.5 h-3.5 text-zinc-400" />}
+                                        </button>
+                                        <button onClick={() => setDeepDivePaper(paper)} className="p-1.5 hover:bg-white/10 rounded-md transition-colors text-zinc-400 hover:text-indigo-400">
+                                          <MessageSquare className="w-3.5 h-3.5" />
+                                        </button>
+                                        <a href={paper.url} target="_blank" rel="noreferrer" className="p-1.5 hover:bg-white/10 rounded-md transition-colors">
+                                          <ExternalLink className="w-3.5 h-3.5 text-zinc-400" />
+                                        </a>
+                                      </div>
+                                    </div>
+                                    <p className="text-xs text-zinc-400 mb-4 leading-relaxed">{paper.summary?.simple_explanation}</p>
+                                    <div className="space-y-2">
+                                      <div className="bg-black/20 p-2.5 rounded-lg border border-white/5">
+                                        <span className="text-[10px] font-bold text-blue-400 uppercase tracking-wider block mb-1">Problem</span>
+                                        <span className="text-xs text-zinc-300">{paper.summary?.problem_statement}</span>
+                                      </div>
+                                      <div className="bg-black/20 p-2.5 rounded-lg border border-white/5">
+                                        <span className="text-[10px] font-bold text-purple-400 uppercase tracking-wider block mb-1">Method</span>
+                                        <span className="text-xs text-zinc-300">{paper.summary?.methodology}</span>
+                                      </div>
+                                      <div className="bg-black/20 p-2.5 rounded-lg border border-white/5">
+                                        <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block mb-1">Result</span>
+                                        <span className="text-xs text-zinc-300">{paper.summary?.key_results}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </Tilt3D>
+                              );
+                            })}
+                        </div>
+                        {/* Show warning if all papers failed */}
+                        {data.papers.filter(p => p.summary?.simple_explanation && p.summary.simple_explanation !== "Error generating summary.").length === 0 && (
+                          <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-6 text-center">
+                            <p className="text-sm text-amber-200/80">⚠️ Unable to generate summaries for these papers. The AI service may be experiencing high demand.</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
 
-              {/* Ideas */}
-              <div className="space-y-4 mt-4">
-                <h3 className="text-lg font-semibold flex items-center gap-2 text-textPrimary">
-                  <Lightbulb className="w-5 h-5 text-green-400" />
-                  Project Ideas based on Gaps
-                </h3>
-                
-                {/* Major Idea */}
-                {data.ideas.major_project && (
-                  <div className="bg-gradient-to-r from-green-500/10 to-emerald-500/5 border border-green-500/20 rounded-xl p-6 relative overflow-hidden">
-                    <div className="absolute top-0 right-0 bg-green-500/20 text-green-400 text-xs font-bold px-3 py-1 rounded-bl-lg">MAJOR PROJECT</div>
-                    <h4 className="text-xl font-bold text-green-300 mb-2 mt-2">{data.ideas.major_project.title}</h4>
-                    <p className="text-textPrimary/90 mb-4 text-sm leading-relaxed">{data.ideas.major_project.description}</p>
-                    <div className="flex flex-wrap gap-2">
-                      {data.ideas.major_project.tech_stack?.map((tech, i) => (
-                        <span key={i} className="bg-surface/80 border border-white/10 text-textSecondary text-xs px-2.5 py-1 rounded-md">
-                          {tech}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
+                    {/* Gap Analysis */}
+                    {data.gap_analysis?.research_gaps?.length > 0 && (
+                      <div className="bg-gradient-to-br from-white/[0.03] to-transparent border border-white/5 rounded-xl p-6 space-y-6">
+                        <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">Research Gaps</h3>
+                        <ul className="space-y-2">
+                          {data.gap_analysis.research_gaps.map((gap, i) => (
+                            <li key={i} className="flex gap-2 text-sm text-zinc-300 items-start">
+                              <div className="w-1 h-1 rounded-full bg-indigo-400 mt-2 shrink-0" />
+                              {gap}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Roadmap Section - Handle Empty Ideas Gracefully */}
+                    {data.ideas && (data.ideas.mini_projects?.length > 0 || data.ideas.major_project?.title) ? (
+                      <div className="space-y-3">
+                        <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider px-1">Your Project Roadmap</h3>
+                        <ProjectRoadmap ideas={data.ideas} />
+                      </div>
+                    ) : (
+                      <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-6 text-center">
+                        <AlertTriangle className="w-5 h-5 text-amber-400 mx-auto mb-2" />
+                        <p className="text-sm text-amber-200/80">
+                          Unable to generate project ideas at this time.
+                        </p>
+                        <p className="text-xs text-amber-200/60 mt-1">
+                          The AI service may be experiencing high demand. Please try again in a moment.
+                        </p>
+                      </div>
+                    )}
+                  </>
                 )}
-
-                {/* Mini Ideas */}
-                <div className="grid md:grid-cols-3 gap-4 mt-4">
-                  {data.ideas.mini_projects?.map((idea, idx) => (
-                    <div key={idx} className="bg-surface border border-white/5 rounded-xl p-5 hover:border-white/10 transition-colors">
-                      <div className="text-xs font-bold text-accent mb-2 uppercase tracking-wider">Mini Project {idx + 1}</div>
-                      <h4 className="font-semibold text-textPrimary mb-2">{idea.title}</h4>
-                      <p className="text-sm text-textSecondary mb-4 line-clamp-3">{idea.description}</p>
-                      <div className="flex flex-wrap gap-1.5 mt-auto">
-                        {idea.tech_stack?.slice(0,3).map((tech, i) => (
-                          <span key={i} className="bg-white/5 text-textSecondary text-[10px] px-2 py-0.5 rounded">
-                            {tech}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              
-            </div>
-          )}
-        </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
+      
+      {isUser && (
+        <div className="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center shrink-0 mt-1">
+          <User className="w-4 h-4 text-zinc-400" />
+        </div>
+      )}
+
+      {deepDivePaper && <DeepDiveChat paper={deepDivePaper} onClose={() => setDeepDivePaper(null)} />}
     </div>
   );
 };

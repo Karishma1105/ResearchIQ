@@ -1,11 +1,11 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+"""Chat router module for handling research query processing and paper analysis."""
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional
-from services.llm import refine_query, summarize_paper, analyze_gaps_and_ideas
+from typing import List
+from services.llm import refine_query, summarize_paper, analyze_gaps_and_ideas, client, MODEL_ID
 from services.papers import fetch_papers
-from database import queries_collection
-import datetime
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +28,12 @@ class ChatResponse(BaseModel):
     gap_analysis: dict
     ideas: dict
 
+class DeepDiveRequest(BaseModel):
+    paper: dict
+    question: str
+
 @router.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks):
+async def chat_endpoint(request: ChatRequest):
     user_query = request.query
     logger.info(f"Received query: {user_query}")
 
@@ -39,16 +43,18 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks)
         logger.info(f"Refined query: {refined}")
 
         # 2. Fetch Papers
-        raw_papers = await fetch_papers(refined, limit=5)
+        raw_papers = await fetch_papers(refined, limit=10)
         logger.info(f"Fetched {len(raw_papers)} papers")
 
         if not raw_papers:
             raise HTTPException(status_code=404, detail="No papers found for this query. Try a different topic.")
 
-        # 3. Summarize Papers
+        # 3. Summarize Papers (Concurrently using asyncio.gather)
+        tasks = [summarize_paper(p["title"], p["abstract"]) for p in raw_papers]
+        summaries = await asyncio.gather(*tasks)
+
         summarized_papers = []
-        for p in raw_papers:
-            summary = await summarize_paper(p["title"], p["abstract"])
+        for p, summary in zip(raw_papers, summaries):
             summarized_papers.append(PaperResponse(
                 title=p["title"],
                 abstract=p["abstract"],
@@ -62,7 +68,7 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks)
         gap_analysis = analysis.get("gap_analysis", {})
         ideas = analysis.get("ideas", {})
 
-        response_data = ChatResponse(
+        return ChatResponse(
             original_query=user_query,
             refined_query=refined,
             papers=summarized_papers,
@@ -70,25 +76,54 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks)
             ideas=ideas
         )
 
-        # 5. Store in Database in background
-        background_tasks.add_task(store_query, response_data.model_dump())
-
-        return response_data
-
     except HTTPException:
-        # Re-raise HTTP exceptions (like 404) as-is
         raise
     except RuntimeError as e:
-        # Configuration errors (missing API key, etc.)
         logger.error(f"Configuration error: {e}")
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.exception(f"Unexpected error processing query '{user_query}': {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-async def store_query(data: dict):
-    data["timestamp"] = datetime.datetime.utcnow()
+
+# --- NEW DEEP DIVE ENDPOINT (Properly placed at router level!) ---
+@router.post("/deep-dive")
+async def deep_dive_endpoint(request: DeepDiveRequest):
+    """Answer questions about a specific research paper."""
+    paper = request.paper
+    question = request.question
+    
+    if not client:
+        raise HTTPException(status_code=503, detail="AI service is not configured.")
+    
+    logger.info(f"Deep dive question for paper: {paper.get('title', 'Unknown')}")
+    
+    prompt = f"""
+You are an expert research assistant discussing this specific academic paper with a student.
+
+Paper Title: {paper.get('title', 'Unknown')}
+Paper Abstract: {paper.get('abstract', 'No abstract available.')}
+
+The student has asked the following question about this paper:
+"{question}"
+
+Instructions:
+- Answer ONLY based on the information in this paper's abstract and title.
+- If the answer is not clear from the abstract, honestly say "The abstract doesn't explicitly mention this, but based on the paper's focus..."
+- Keep the answer clear, concise, and student-friendly (max 3-4 sentences).
+- Do not make up information that isn't implied by the paper.
+"""
+    
     try:
-        await queries_collection.insert_one(data)
+        response = await client.chat.completions.create(
+            model=MODEL_ID,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.5
+        )
+        
+        answer = response.choices[0].message.content
+        return {"answer": answer}
+        
     except Exception as e:
-        print(f"Failed to store query: {e}")
+        logger.error(f"Deep dive error: {e}")
+        raise HTTPException(status_code=500, detail=f"Error generating answer: {str(e)}")
