@@ -7,7 +7,7 @@ import uvicorn
 origins = [
     "http://localhost:5173",
     "http://localhost:3000",
-    ""https://research-iq-flax.vercel.app",  # Allow all origins for now (we'll restrict later)
+    "https://research-iq-flax.vercel.app",  # Allow all origins for now (we'll restrict later)
 ]
 
 app = FastAPI(title="ResearchIQ API", description="AI-powered research assistant API")
